@@ -26,20 +26,31 @@ jobs:
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem ~/.oci/config
 
-      - name: Setup SSH Key
-        run: echo "${{ secrets.VM_SSH_PUBLIC_KEY }}" > ~/.oci/vm_key.pub
-
-      - name: Create shape config
-        run: echo '{"ocpus": 2, "memoryInGBs": 12}' > ~/.oci/shape_config.json
+      - name: Setup Keys and Config
+        run: |
+          echo "${{ secrets.VM_SSH_PUBLIC_KEY }}" > ~/.oci/vm_key.pub
+          echo '{"ocpus": 2, "memoryInGBs": 12}' > ~/.oci/shape_config.json
 
       - name: Try to create VM
         id: create_vm
+        shell: bash
         run: |
-          RESULT=$(oci compute instance launch --endpoint "https://iaas.ap-osaka-1.oraclecloud.com" --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" --availability-domain "hrhi:AP-OSAKA-1-AD-1" --image-id "ocid1.image.oc1.ap-osaka-1.aaaaaaaaec3dzncld2qj5eg33qnpy5jfdos6tpm6zgc6jggyzghio3lmthkq" --shape "VM.Standard.A1.Flex" --shape-config file://~/.oci/shape_config.json --subnet-id "ocid1.subnet.oc1.ap-osaka-1.aaaaaaaaxhmoj2thfcbpdp5zbuykywyspt3pk2zurp2qvbpl72fx2nhb2iba" --display-name "free-arm-vm" --ssh-authorized-keys-file ~/.oci/vm_key.pub --assign-public-ip true 2>&1) || true
+          set +e
+          oci compute instance launch \
+            --endpoint "https://iaas.ap-osaka-1.oraclecloud.com" \
+            --compartment-id "${{ secrets.OCI_TENANCY_OCID }}" \
+            --availability-domain "hrhi:AP-OSAKA-1-AD-1" \
+            --image-id "ocid1.image.oc1.ap-osaka-1.aaaaaaaaec3dzncld2qj5eg33qnpy5jfdos6tpm6zgc6jggyzghio3lmthkq" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config file://~/.oci/shape_config.json \
+            --subnet-id "ocid1.subnet.oc1.ap-osaka-1.aaaaaaaaxhmoj2thfcbpdp5zbuykywyspt3pk2zurp2qvbpl72fx2nhb2iba" \
+            --display-name "free-arm-vm" \
+            --ssh-authorized-keys-file ~/.oci/vm_key.pub \
+            --assign-public-ip true > /tmp/oci_result.json 2>&1
+          RESULT=$(cat /tmp/oci_result.json)
           if echo "$RESULT" | grep -q '"lifecycle-state"'; then
             echo "STATUS=success" >> $GITHUB_OUTPUT
-            PUBLIC_IP=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('public-ip','확인필요'))" 2>/dev/null || echo "확인필요")
-            echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
+            echo "PUBLIC_IP=확인필요" >> $GITHUB_OUTPUT
           elif echo "$RESULT" | grep -q "LimitExceeded"; then
             echo "STATUS=limit" >> $GITHUB_OUTPUT
           else
@@ -51,7 +62,7 @@ jobs:
         run: |
           curl -s -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d '{"content": "🎉 **OCI ARM VM 생성 성공!**\nIP: ${{ steps.create_vm.outputs.PUBLIC_IP }}\nSSH: ssh -i vm_key opc@${{ steps.create_vm.outputs.PUBLIC_IP }}"}'
+            -d '{"content": "🎉 OCI ARM VM 생성 성공! SSH: ssh -i vm_key opc@${{ steps.create_vm.outputs.PUBLIC_IP }}"}'
 
       - name: Notify Discord - Limit
         if: steps.create_vm.outputs.STATUS == 'limit'
